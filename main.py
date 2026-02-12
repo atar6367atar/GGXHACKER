@@ -13,17 +13,13 @@ from flask import Flask
 from telegram import Bot, Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Render logları için logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
+# Loglar Render'da görünsün
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger(__name__)
 
 TOKEN = os.environ.get("BOT_TOKEN")
 if not TOKEN:
-    logger.error("BOT_TOKEN environment variable eksik! Render dashboard'dan ekle.")
+    logger.error("BOT_TOKEN eksik! Render Environment Variables'a ekle.")
     sys.exit(1)
 
 bot = Bot(token=TOKEN)
@@ -38,17 +34,12 @@ class Calistirici:
 
     async def mesaj(self, text: str):
         try:
-            await bot.edit_message_text(
-                chat_id=self.chat_id,
-                message_id=self.message_id,
-                text=text,
-                parse_mode="Markdown"
-            )
-        except Exception as e:
-            logger.warning(f"Mesaj edit hatası: {e}")
+            await bot.edit_message_text(chat_id=self.chat_id, message_id=self.message_id, text=text, parse_mode="Markdown")
+        except:
+            pass  # sessiz geç
 
     def kur_venv(self):
-        asyncio.create_task(self.mesaj("🔧 *Sanal ortam kuruluyor...*"))
+        asyncio.create_task(self.mesaj("🔧 *Venv kuruluyor...*"))
         venv.create(self.venv_path, with_pip=True, clear=True)
 
         if sys.platform == "win32":
@@ -58,7 +49,8 @@ class Calistirici:
             self.pip = os.path.join(self.venv_path, "bin", "pip")
             self.python = os.path.join(self.venv_path, "bin", "python")
 
-        subprocess.run([self.python, "-m", "pip", "install", "--upgrade", "pip"], timeout=40, check=False)
+        # Hızlı kurulum için pip + wheel + setuptools
+        subprocess.run([self.python, "-m", "pip", "install", "--upgrade", "pip", "wheel", "setuptools"], timeout=40, check=False, capture_output=True)
 
     def kaydet_kod(self, kod: str, dosya_adi: str):
         self.dosya_yolu = os.path.join(self.dizin, dosya_adi)
@@ -75,66 +67,83 @@ class Calistirici:
         for m in re.findall(r"^from\s+(\w+)\s+import", icerik, re.M):
             self.pkgs.add(m.split('.')[0])
 
-        std = {'os', 'sys', 're', 'math', 'json', 'time', 'datetime', 'random', 'pathlib', 'socket', 'threading', 'asyncio', 'logging', 'subprocess', 'tempfile', 'shutil', 'venv', 'hashlib', 'uuid', 'csv', 'argparse', 'collections', 'functools', 'itertools'}
+        std = {'os','sys','re','math','json','time','datetime','random','pathlib','socket','threading','asyncio','logging','subprocess','tempfile','shutil','venv','hashlib','uuid','csv','argparse','collections','functools','itertools'}
         self.pkgs = [p for p in self.pkgs if p not in std and p.strip()]
 
     def paketleri_yukle(self):
         if not self.pkgs:
+            asyncio.create_task(self.mesaj("📦 Hiç ekstra paket gerekmiyor."))
             return
-        asyncio.create_task(self.mesaj(f"📦 *{len(self.pkgs)} paket tespit edildi*"))
+
+        asyncio.create_task(self.mesaj(f"📦 *{len(self.pkgs)} paket hızlı yükleniyor...*"))
+
         for i, p in enumerate(self.pkgs, 1):
             asyncio.create_task(self.mesaj(f"⬇️ `{p}` ({i}/{len(self.pkgs)})"))
             try:
-                subprocess.run([self.pip, "install", "--no-cache-dir", p], timeout=200, check=True)
+                subprocess.run(
+                    [self.pip, "install", "--no-cache-dir", "--quiet", p],
+                    timeout=120, check=True, capture_output=True
+                )
             except Exception as e:
-                asyncio.create_task(self.mesaj(f"⚠️ `{p}` yüklenemedi → {str(e)[:100]}"))
+                asyncio.create_task(self.mesaj(f"⚠️ `{p}` yüklenemedi (devam ediyorum): {str(e)[:80]}"))
 
     def calistir_kod(self):
-        asyncio.create_task(self.mesaj("🚀 *Kod çalıştırılıyor (60 sn limit)*"))
+        asyncio.create_task(self.mesaj("🚀 *Kod hızlı çalıştırılıyor (60 sn limit)*"))
         try:
             result = subprocess.run(
                 [self.python, self.dosya_yolu],
-                capture_output=True,
-                text=True,
-                timeout=60
+                capture_output=True, text=True, timeout=60
             )
             cevap = "🎉 *Kod çalıştı!*\n\n"
             if result.stdout.strip():
                 cevap += f"📤 **Çıktı:**\n```\n{result.stdout[:1400]}\n```\n"
             if result.stderr.strip():
                 cevap += f"⚠️ **Hata/Stderr:**\n```\n{result.stderr[:700]}\n```\n"
-            cevap += f"✅ **Exit kodu:** `{result.returncode}`"
+            cevap += f"✅ **Exit:** `{result.returncode}`"
             bot.send_message(self.chat_id, cevap, parse_mode="Markdown")
-            asyncio.create_task(self.mesaj("✅ *İşlem bitti*"))
+            asyncio.create_task(self.mesaj("✅ *Tamamlandı*"))
         except subprocess.TimeoutExpired:
-            bot.send_message(self.chat_id, "⏰ *Zaman aşımı (60 sn)*")
+            bot.send_message(self.chat_id, "⏰ *Zaman aşımı*")
         except Exception as e:
-            bot.send_message(self.chat_id, f"❌ Çalıştırma hatası: {str(e)[:200]}")
+            bot.send_message(self.chat_id, f"❌ Çalıştırma hatası: {str(e)[:150]}")
+
+async def durum(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global BOT_SAHIBI
+    text = "📊 *Bot Durumu*\n\n"
+    text += f"• Sahip: {'Evet (sen)' if update.effective_user.id == BOT_SAHIBI else 'Ayarlı'}\n"
+    text += f"• Sahip ID: `{BOT_SAHIBI or 'Henüz yok'}`\n"
+    text += "• Mod: Polling (Render free uyumlu)\n"
+    text += "• Aktif: Evet\n"
+    text += "• Paket kurma: Otomatik + hızlı (--quiet)\n"
+    text += "• Çalıştırma limit: 60 sn\n\n"
+    text += "*Her şey yolunda görünüyor* 💕"
+    await update.message.reply_markdown(text)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_SAHIBI
     BOT_SAHIBI = update.effective_user.id
-    logger.info(f"Sahip ayarlandı: {BOT_SAHIBI}")
+    logger.info(f"Sahip: {BOT_SAHIBI}")
     await update.message.reply_markdown(
         "💕 *Merhaba LO!*\n\n"
         "📥 **.py** dosyanı gönder\n"
-        "📦 Gerekli paketleri otomatik kurarım\n"
-        "🚀 Çalıştırıp sonucu gösteririm\n\n"
-        "*Hadi başla* 😘"
+        "📦 Paketleri otomatik + hızlı kurarım\n"
+        "🚀 Çalıştırırım\n"
+        "/durum → bot durumunu gör\n\n"
+        "*Başla hadi* 😘"
     )
 
 async def dosya_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_SAHIBI
     if update.effective_user.id != BOT_SAHIBI:
-        await update.message.reply_text("❌ Sadece LO 💕 kullanabilir")
+        await update.message.reply_text("❌ Sadece LO 💕")
         return
 
     doc = update.message.document
     if not doc or not doc.file_name.lower().endswith('.py'):
-        await update.message.reply_text("❌ Sadece .py dosyası gönder")
+        await update.message.reply_text("❌ Sadece .py dosyası")
         return
 
-    await update.message.reply_markdown("📥 *Dosya indiriliyor...*")
+    await update.message.reply_markdown("📥 *Dosya alınıyor...*")
 
     file = await doc.get_file()
     tmp_dir = tempfile.mkdtemp(dir="/tmp")
@@ -144,7 +153,7 @@ async def dosya_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with open(py_path, encoding="utf-8") as f:
         kod = f.read()
 
-    msg = await update.message.reply_markdown("⏳ *Hazırlık başlıyor...*")
+    msg = await update.message.reply_markdown("⏳ *Hazırlık...*")
 
     runner = Calistirici(update.effective_chat.id, msg.message_id)
 
@@ -162,26 +171,27 @@ async def main():
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("durum", durum))
     app.add_handler(MessageHandler(filters.Document.ALL, dosya_handler))
 
-    logger.info("Eski webhook varsa siliniyor + pending temizleniyor...")
+    logger.info("Pending temizleniyor...")
     await bot.delete_webhook(drop_pending_updates=True)
 
-    logger.info("Polling başlatılıyor...")
+    logger.info("Polling başlıyor...")
     await app.initialize()
     await app.start()
     await app.updater.start_polling(
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=True,
-        poll_interval=0.8,   # Render için makul
-        timeout=25
+        poll_interval=0.6,   # Hızlı ama Render'ı yormaz
+        timeout=20
     )
 
-    # Flask health check (Render port beklemesi için)
+    # Flask health check (Render port için)
     flask_app = Flask(__name__)
     @flask_app.route('/')
     def home():
-        return "LO Bot polling modunda aktif ❤️"
+        return "Bot polling aktif ❤️"
 
     threading.Thread(
         target=flask_app.run,
@@ -189,8 +199,8 @@ async def main():
         daemon=True
     ).start()
 
-    logger.info("Bot hazır! Mesaj gönderebilirsin.")
-    await asyncio.Event().wait()  # Sonsuz döngü
+    logger.info("Bot hazır!")
+    await asyncio.Event().wait()
 
 if __name__ == '__main__':
     try:
