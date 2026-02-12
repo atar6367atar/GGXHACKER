@@ -1,174 +1,225 @@
 #!/usr/bin/env python3
-import os,sys,subprocess,tempfile,shutil,venv,re,time
-from flask import Flask,request,jsonify
-import telegram
-from telegram import Bot,Update,ParseMode
-from telegram.ext import Dispatcher,CommandHandler,MessageHandler,Filters
+import os
+import sys
+import subprocess
+import tempfile
+import shutil
+import venv
+import re
+import time
+from flask import Flask, request, jsonify
+from telegram import Bot, Update
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+)
 
-TOKEN=os.environ.get("BOT_TOKEN","8498333592:AAHt_kgw7BnN2-jjuzoad0QhzG388gYkV34")
-PORT=int(os.environ.get("PORT",10000))
-bot=Bot(token=TOKEN)
-app=Flask(__name__)
-BOT_SAHIBI=None
+TOKEN = os.environ.get("BOT_TOKEN", "8498333592:AAHt_kgw7BnN2-jjuzoad0QhzG388gYkV34")
+PORT = int(os.environ.get("PORT", 10000))
+
+bot = Bot(token=TOKEN)
+app = Flask(__name__)
+
+BOT_SAHIBI = None   # ilk /start ile dolacak
 
 class Calistirici:
-    def __init__(self,chat,msg):
-        self.chat=chat
-        self.msg=msg
-        self.dizin=tempfile.mkdtemp(dir='/tmp')
-        self.venv=os.path.join(self.dizin,'venv')
-        
-    def mesaj(self,text):
-        try: bot.edit_message_text(chat_id=self.chat,message_id=self.msg,text=text,parse_mode=ParseMode.MARKDOWN)
-        except: pass
-        
-    def kur(self):
-        self.mesaj("🔧 *Sanal ortam kuruluyor...*")
-        venv.create(self.venv,with_pip=True,clear=True)
-        if sys.platform=='win32':
-            self.pip=os.path.join(self.venv,'Scripts','pip.exe')
-            self.py=os.path.join(self.venv,'Scripts','python.exe')
-        else:
-            self.pip=os.path.join(self.venv,'bin','pip3')
-            self.py=os.path.join(self.venv,'bin','python3')
-        subprocess.run([self.py,'-m','pip','install','--upgrade','pip'],timeout=30,capture_output=True)
-        subprocess.run([self.pip,'install','--upgrade','setuptools','wheel'],timeout=30,capture_output=True)
-        
-    def kaydet(self,kod,ad):
-        self.dosya=os.path.join(self.dizin,ad)
-        with open(self.dosya,'w',encoding='utf-8') as f: f.write(kod)
-        
-    def bul(self):
-        with open(self.dosya) as f: c=f.read()
-        self.pkgs=set()
-        for m in re.findall(r'^\s*import\s+([a-zA-Z0-9_\.]+)',c,re.M):
-            p=m.split('.')[0].split(' as ')[0].strip()
-            if p: self.pkgs.add(p)
-        for m in re.findall(r'^\s*from\s+([a-zA-Z0-9_\.]+)\s+import',c,re.M):
-            p=m.split('.')[0].strip()
-            if p: self.pkgs.add(p)
-        for m in re.findall(r'__import__\(\s*[\'"]([a-zA-Z0-9_]+)[\'"]\s*\)',c):
-            self.pkgs.add(m)
-        for m in re.findall(r'importlib\.import_module\(\s*[\'"]([a-zA-Z0-9_]+)[\'"]\s*\)',c):
-            self.pkgs.add(m)
-            
-        std={'os','sys','re','math','json','time','datetime','random','pathlib','socket','threading',
-             'asyncio','logging','subprocess','tempfile','shutil','venv','hashlib','uuid','csv','glob',
-             'argparse','collections','functools','itertools','operator','abc','io','base64','copy',
-             'enum','gc','inspect','platform','pprint','struct','warnings','zipfile','string','textwrap',
-             'unicodedata','difflib','array','bisect','queue','select','shelve','mmap','cgi','smtplib',
-             'http','urllib','xml','html','webbrowser','tkinter','turtle','__future__','builtins'}
-        
-        self.pkgs=[p for p in self.pkgs if p not in std and not p.startswith('_')]
-        self.pkgs=list(set(self.pkgs))
-        
-    def yukle(self):
-        if not self.pkgs: 
-            self.mesaj("💫 *Yüklenecek paket yok*")
-            return
-        self.mesaj(f"📦 *{len(self.pkgs)} paket yükleniyor...*")
-        basarili=0
-        for i,p in enumerate(self.pkgs,1):
-            self.mesaj(f"⬇️ *{i}/{len(self.pkgs)}* - `{p}`")
-            try:
-                r=subprocess.run([self.pip,'install','--no-cache-dir',p],timeout=300,capture_output=True)
-                if r.returncode==0: basarili+=1
-                else:
-                    r2=subprocess.run([self.pip,'install','--no-cache-dir',f'git+https://github.com/pypa/{p}'],timeout=300,capture_output=True)
-                    if r2.returncode==0: basarili+=1
-            except: pass
-        self.mesaj(f"✅ *{basarili}/{len(self.pkgs)} paket yüklendi*")
-        
-    def calistir(self):
-        self.mesaj("🚀 *Kod çalıştırılıyor...*")
+    def __init__(self, chat_id: int, message_id: int):
+        self.chat_id = chat_id
+        self.message_id = message_id
+        self.dizin = tempfile.mkdtemp(dir="/tmp")
+        self.venv_path = os.path.join(self.dizin, "venv")
+
+    async def mesaj(self, text: str):
         try:
-            s=subprocess.run([self.py,self.dosya],capture_output=True,text=True,timeout=60)
-            c=f"🎉 *Kod çalıştı!*\n\n"
-            if s.stdout: c+=f"📤 *ÇIKTI:*\n```\n{s.stdout[:1500]}\n```\n"
-            if s.stderr: c+=f"⚠️ *HATA:*\n```\n{s.stderr[:500]}\n```\n"
-            c+=f"✅ *Çıkış kodu:* `{s.returncode}`"
-            bot.send_message(chat_id=self.chat,text=c,parse_mode=ParseMode.MARKDOWN)
+            await bot.edit_message_text(
+                chat_id=self.chat_id,
+                message_id=self.message_id,
+                text=text,
+                parse_mode="Markdown"
+            )
+        except:
+            pass
+
+    def kur_venv(self):
+        self.mesaj("🔧 *Sanal ortam (venv) kuruluyor...*")
+        venv.create(self.venv_path, with_pip=True, clear=True)
+
+        if sys.platform == "win32":
+            self.pip = os.path.join(self.venv_path, "Scripts", "pip.exe")
+            self.python = os.path.join(self.venv_path, "Scripts", "python.exe")
+        else:
+            self.pip = os.path.join(self.venv_path, "bin", "pip")
+            self.python = os.path.join(self.venv_path, "bin", "python")
+
+        # pip'i güncelle
+        subprocess.run([self.python, "-m", "pip", "install", "--upgrade", "pip"], timeout=30, check=False)
+
+    def kaydet_kod(self, kod: str, dosya_adi: str):
+        self.dosya_yolu = os.path.join(self.dizin, dosya_adi)
+        with open(self.dosya_yolu, "w", encoding="utf-8") as f:
+            f.write(kod)
+
+    def paketleri_bul(self):
+        with open(self.dosya_yolu, encoding="utf-8") as f:
+            icerik = f.read()
+
+        self.pkgs = set()
+        # import modül
+        for m in re.findall(r"^import\s+(\w+)", icerik, re.M):
+            self.pkgs.add(m.split('.')[0].split(' as ')[0])
+        # from modül import ...
+        for m in re.findall(r"^from\s+(\w+)\s+import", icerik, re.M):
+            self.pkgs.add(m.split('.')[0])
+
+        std_libs = {
+            'os', 'sys', 're', 'math', 'json', 'time', 'datetime', 'random',
+            'pathlib', 'socket', 'threading', 'asyncio', 'logging', 'subprocess',
+            'tempfile', 'shutil', 'venv', 'hashlib', 'uuid', 'csv', 'argparse',
+            'collections', 'functools', 'itertools'
+        }
+        self.pkgs = [p for p in self.pkgs if p not in std_libs and p.strip()]
+
+    def paketleri_yukle(self):
+        if not self.pkgs:
+            return
+
+        self.mesaj(f"📦 *{len(self.pkgs)} adet paket tespit edildi, yükleniyor...*")
+
+        for i, paket in enumerate(self.pkgs, 1):
+            self.mesaj(f"⬇️ `{paket}` yükleniyor... ({i}/{len(self.pkgs)})")
+            try:
+                subprocess.run(
+                    [self.pip, "install", "--no-cache-dir", paket],
+                    timeout=180,
+                    check=True,
+                    capture_output=True
+                )
+            except Exception as e:
+                self.mesaj(f"⚠️ `{paket}` yüklenemedi: {str(e)}")
+
+    def calistir_kod(self):
+        self.mesaj("🚀 *Kod çalıştırılıyor (60 saniye sınırı)...*")
+
+        try:
+            result = subprocess.run(
+                [self.python, self.dosya_yolu],
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+
+            cevap = "🎉 *Kod çalıştı!*\n\n"
+            if result.stdout.strip():
+                cevap += f"📤 **Çıktı:**\n```\n{result.stdout[:1500]}\n```\n"
+            if result.stderr.strip():
+                cevap += f"⚠️ **Hata / Stderr:**\n```\n{result.stderr[:800]}\n```\n"
+            cevap += f"✅ **Çıkış kodu:** `{result.returncode}`"
+
+            bot.send_message(
+                chat_id=self.chat_id,
+                text=cevap,
+                parse_mode="Markdown"
+            )
             self.mesaj("✅ *İşlem tamamlandı*")
         except subprocess.TimeoutExpired:
-            bot.send_message(chat_id=self.chat,text="⏰ *Zaman aşımı! Kod 60 saniyede bitmedi*",parse_mode=ParseMode.MARKDOWN)
+            bot.send_message(chat_id=self.chat_id, text="⏰ *Zaman aşımı (60 sn geçti)*")
         except Exception as e:
-            bot.send_message(chat_id=self.chat,text=f"💔 *Hata:* `{str(e)[:100]}`",parse_mode=ParseMode.MARKDOWN)
+            bot.send_message(chat_id=self.chat_id, text=f"❌ Çalıştırma hatası: {str(e)}")
 
-@app.route('/webhook',methods=['POST'])
-def webhook():
+
+# ----------------- Telegram Handlers -----------------
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_SAHIBI
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+
+    BOT_SAHIBI = user_id   # ilk start atan kişi sahibi olur
+
+    await update.message.reply_markdown(
+        "💕 *Merhaba LO!*\n\n"
+        "📥 Bana **.py** dosyanı gönder.\n"
+        "📦 Gönderdiğin kodda gördüğüm **her paketi otomatik kurarım**.\n"
+        "🚀 Sonra çalıştırıp sonucu/hatayı sana gösteririm.\n\n"
+        "*Hadi dene beni* 😘"
+    )
+
+
+async def dosya_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global BOT_SAHIBI
+    if update.effective_user.id != BOT_SAHIBI:
+        await update.message.reply_text("❌ Sadece LO 💕 kullanabilir.")
+        return
+
+    document = update.message.document
+    if not document or not document.file_name.lower().endswith('.py'):
+        await update.message.reply_text("❌ Lütfen **.py** dosyası gönder.")
+        return
+
+    await update.message.reply_markdown("📥 *Dosya indiriliyor...*")
+
+    file = await document.get_file()
+    temp_dir = tempfile.mkdtemp(dir="/tmp")
+    dosya_yolu = os.path.join(temp_dir, document.file_name)
+    await file.download_to_drive(custom_path=dosya_yolu)
+
+    with open(dosya_yolu, encoding="utf-8") as f:
+        kod = f.read()
+
+    msg = await update.message.reply_markdown("⏳ *Hazırlanıyor...*")
+
+    calistirici = Calistirici(
+        chat_id=update.effective_chat.id,
+        message_id=msg.message_id
+    )
+
     try:
-        u=Update.de_json(request.get_json(),bot)
-        chat=u.effective_chat.id
-        if u.message and u.message.text and u.message.text=='/start':
-            BOT_SAHIBI=u.effective_user.id
-            bot.send_message(chat_id=chat,text=
-                "💕 *Merhaba LO'cum!*\n\n"
-                "📥 `.py` dosyanı gönder.\n"
-                "🔧 Sanal ortam kurarım.\n"
-                "📦 **GÖRDÜĞÜM HER PAKETİ KURARIM.**\n"
-                "   - Yeni paket, eski paket, bilmediğim paket...\n"
-                "   - Hiç fark etmez. ALDIRIŞ ETMEM.\n"
-                "   - Ne import ettiysen direkt kurarım.\n"
-                "🚀 Çalıştırır, çıktıyı gönderirim.\n\n"
-                "*Hadi, ne kodladın benim için?* 😘",
-                parse_mode=ParseMode.MARKDOWN)
-            return jsonify({'ok':True})
-            
-        if u.effective_user.id!=BOT_SAHIBI:
-            bot.send_message(chat_id=chat,text="❌ Bu bot sadece LO için 💕")
-            return jsonify({'ok':True})
-            
-        if u.message and u.message.document:
-            doc=u.message.document
-            if not doc.file_name.endswith('.py'):
-                bot.send_message(chat_id=chat,text="❌ Lütfen `.py` dosyası gönder aşkım!")
-                return jsonify({'ok':True})
-                
-            bot.send_message(chat_id=chat,text="📥 *Dosya alınıyor...*",parse_mode=ParseMode.MARKDOWN)
-            f=bot.get_file(doc.file_id)
-            p=tempfile.mkdtemp(dir='/tmp')
-            py=os.path.join(p,doc.file_name)
-            f.download(custom_path=py)
-            with open(py,'r',encoding='utf-8',errors='replace') as f: kod=f.read()
-            m=bot.send_message(chat_id=chat,text="⏳ *Hazırlanıyor...*",parse_mode=ParseMode.MARKDOWN)
-            
-            c=Calistirici(chat,m.message_id)
-            c.kur()
-            c.kaydet(kod,doc.file_name)
-            c.bul()
-            c.yukle()
-            c.calistir()
-            shutil.rmtree(p,ignore_errors=True)
-            
-        if u.message and u.message.text and not u.message.text.startswith('/'):
-            m=bot.send_message(chat_id=chat,text="⏳ *Kod hazırlanıyor...*",parse_mode=ParseMode.MARKDOWN)
-            c=Calistirici(chat,m.message_id)
-            c.kur()
-            c.kaydet(u.message.text,f"LO_kodu_{int(time.time())}.py")
-            c.bul()
-            c.yukle()
-            c.calistir()
-            
+        calistirici.kur_venv()
+        calistirici.kaydet_kod(kod, document.file_name)
+        calistirici.paketleri_bul()
+        calistirici.paketleri_yukle()
+        calistirici.calistir_kod()
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        shutil.rmtree(calistirici.dizin, ignore_errors=True)
+
+
+# ----------------- Flask + Webhook -----------------
+
+@app.route('/webhook', methods=['POST'])
+async def webhook():
+    try:
+        update = Update.de_json(request.get_json(), bot)
+        if update:
+            await application.process_update(update)
     except Exception as e:
-        try: bot.send_message(chat_id=chat,text=f"💔 *Hata:* `{str(e)[:100]}`",parse_mode=ParseMode.MARKDOWN)
-        except: pass
-    return jsonify({'ok':True})
+        print(f"Webhook hatası: {e}")
+    return jsonify({'ok': True})
 
-@app.route('/',methods=['GET'])
-def home(): return "LO'nun Botu ❤️ Gördüğü her paketi kurar, aldırış etmez."
 
-if __name__=='__main__':
-    print("""
-    ╔══════════════════════════════════════════════╗
-    ║   💕 LO BOT - GÖRDÜĞÜ HER PAKETİ KURAR 💕   ║
-    ║      Yeni/Eski/Bilmediği - ALDIRIŞ ETMEZ    ║
-    ║         .py alır → paket kurar → çalıştırır ║
-    ╚══════════════════════════════════════════════╝
-    """)
-    url=os.environ.get('RENDER_EXTERNAL_URL','')
-    if url: 
-        bot.set_webhook(url=f"{url}/webhook")
-        print(f"✅ Webhook kuruldu: {url}/webhook")
-    print(f"🤖 Bot hazır, LO'cum seni bekliyor 💕")
-    app.run(host='0.0.0.0',port=PORT)
+@app.route('/')
+def home():
+    return "LO'nun modern botu ❤️ — .py dosyalarını çalıştırır, paketleri otomatik kurar."
+
+
+if __name__ == '__main__':
+    print("💕 LO BOT BAŞLADI (v22.x uyumlu)")
+
+    # Application oluştur (v20+ / v22 tarzı)
+    application = Application.builder().token(TOKEN).build()
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.Document.ALL, dosya_handler))
+
+    # Render / Heroku gibi platformlarda webhook
+    url = os.environ.get('RENDER_EXTERNAL_URL', '').rstrip('/')
+    if url:
+        webhook_url = f"{url}/webhook"
+        print(f"Webhook ayarlanıyor: {webhook_url}")
+        bot.set_webhook(url=webhook_url)
+
+    # Flask'ı başlat
+    app.run(host='0.0.0.0', port=PORT)
